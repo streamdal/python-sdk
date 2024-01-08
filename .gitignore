@@ -8,3 +8,5 @@ dist/*
 htmlcov/*
 coverage.xml
 coverage/*
+assets/test/*.wasm
+assets/test/*.txt

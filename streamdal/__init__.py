@@ -396,9 +396,20 @@ class StreamdalClient:
                         )
                         continue
 
-                    continue_pipeline, continue_process = self._handle_condition(
+                    (
+                        continue_pipeline,
+                        continue_process,
+                        drop_message,
+                    ) = self._handle_condition(
                         step.on_failure, pipeline, step, cmd.audience
                     )
+                    if drop_message:
+                        step_status.abort_status = protos.AbortStatus.ABORT_STATUS_ALL
+                        pipeline_status.step_status.append(step_status)
+                        resp.pipeline_status.append(pipeline_status)
+                        resp.drop_message = True
+                        return resp
+
                     if not continue_process:
                         # Exit function early
                         step_status.abort_status = protos.AbortStatus.ABORT_STATUS_ALL
@@ -421,12 +432,23 @@ class StreamdalClient:
                     CounterEntry(name=errors_counter, value=1.0, labels=labels, aud=aud)
                 )
 
-                continue_pipeline, continue_process = self._handle_condition(
+                (
+                    continue_pipeline,
+                    continue_process,
+                    drop_message,
+                ) = self._handle_condition(
                     step.on_failure, pipeline, step, cmd.audience
                 )
 
                 step_status.error = True
                 step_status.error_message = "Step failed: " + wasm_resp.exit_msg
+
+                if drop_message:
+                    step_status.abort_status = protos.AbortStatus.ABORT_STATUS_ALL
+                    pipeline_status.step_status.append(step_status)
+                    resp.pipeline_status.append(pipeline_status)
+                    resp.drop_message = True
+                    return resp
 
                 if not continue_process:
                     # Exit function early
@@ -499,12 +521,21 @@ class StreamdalClient:
         pipeline: protos.Pipeline,
         step: protos.PipelineStep,
         aud: protos.Audience,
-    ) -> (bool, bool):
+    ) -> (bool, bool, bool):
         continue_pipeline = True
         continue_process = True
+        drop_message = False
 
         for cond in conditions:
-            if cond == protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_NOTIFY:
+            if (
+                cond
+                == protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_DISCARD_MESSAGE
+            ):
+                drop_message = True
+                self.log.debug(
+                    f"Step '{step.name}' failed, discarding message and aborting"
+                )
+            elif cond == protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_NOTIFY:
                 self._notify_condition(pipeline, step, aud)
                 self.log.debug(f"Step '{step.name}' failed, notifying")
             elif (
@@ -525,7 +556,7 @@ class StreamdalClient:
                 # We still need to continue to remaining steps after other conditions have been processed
                 self.log.debug(f"Step '{step.name}' failed, continuing to next step")
 
-        return continue_pipeline, continue_process
+        return continue_pipeline, continue_process, drop_message
 
     def _get_pipelines(self, aud: protos.Audience) -> dict:
         """
