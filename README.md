@@ -45,7 +45,9 @@ res = client.process(
     )
 )
 
-if res.error:
+if res.drop_message:
+    print("Discarding message")
+elif res.error:
     print(res.error_message)
 else:
     pprint.pprint(res.data)
