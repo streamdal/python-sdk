@@ -284,6 +284,7 @@ class StreamdalClient:
             status=protos.ExecStatus.EXEC_STATUS_TRUE,
             status_message="",
             pipeline_status=[],
+            metadata={},
         )
 
         payload_size = len(req.data)  # No need to compute this multiple times
@@ -421,6 +422,10 @@ class StreamdalClient:
                         f"Step '{step.name}' succeeded, continuing to next step"
                     )
                     continue
+
+                if cond is not None:
+                    for k, v in cond.metadata.items():
+                        resp.metadata[k] = v
 
                 if (
                     cond is not None
