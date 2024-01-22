@@ -139,7 +139,7 @@ class TestStreamdalClient:
 
         assert resp is not None
         assert resp.status == protos.ExecStatus.EXEC_STATUS_TRUE
-        assert resp.status_message == ""
+        assert resp.status_message == "No pipelines found for audience, doing nothing"
         assert resp.data == b'{"object": {"type": "streamdal"}}'
 
     def test_process_failure_and_abort(self):
@@ -283,7 +283,7 @@ class TestStreamdalClient:
 
         assert resp is not None
         assert resp.status == protos.ExecStatus.EXEC_STATUS_TRUE
-        assert resp.status_message == ""
+        assert resp.status_message == "No pipelines found for audience, doing nothing"
         assert resp.data == b'{"object": {"type": "streamdal"}}'
 
     def test_tail_request_start(self, mocker):
