@@ -18,7 +18,11 @@ from grpclib.client import Channel
 from streamdal.metrics import Metrics, CounterEntry
 from streamdal.tail import Tail
 from streamdal.kv import KV
-from streamdal_protos.protos import SdkResponse as ProcessResponse
+from streamdal_protos.protos import (
+    SdkResponse as ProcessResponse,
+    AbortCondition,
+    WasmExitCode,
+)
 from threading import Thread, Event
 from wasmtime import (
     Config,
@@ -277,8 +281,8 @@ class StreamdalClient:
 
         resp = protos.SdkResponse(
             data=copy(req.data),
-            error=False,
-            error_message="",
+            status=protos.ExecStatus.EXEC_STATUS_TRUE,
+            status_message="",
             pipeline_status=[],
         )
 
@@ -375,9 +379,9 @@ class StreamdalClient:
             for step in pipeline.steps:
                 step_status = protos.StepStatus(
                     name=step.name,
-                    error=False,
-                    error_message="",
-                    abort_status=protos.AbortStatus.ABORT_STATUS_UNSET,
+                    status=protos.ExecStatus.EXEC_STATUS_TRUE,
+                    status_message="",
+                    abort_condition=AbortCondition.ABORT_CONDITION_UNSET,
                 )
 
                 # Exec wasm
@@ -389,65 +393,65 @@ class StreamdalClient:
                 if len(wasm_resp.output_payload) > 0:
                     resp.data = wasm_resp.output_payload
 
+                # This will check if the step is a schema step and generate a schema
+                # if one is currently not in memory. If one is in memory, it will
+                # be checked against the current schema and sent to the server if it differs.
                 self._handle_schema(aud, step, wasm_resp)
 
-                # If successful, continue to next step, don't need to check conditions
-                if wasm_resp.exit_code == protos.WasmExitCode.WASM_EXIT_CODE_SUCCESS:
-                    # Grab inter-step result and pass to next step
-                    isr = wasm_resp.inter_step_result
+                # Grab inter-step result and pass to next step
+                isr = wasm_resp.inter_step_result
 
-                    if self.cfg.dry_run:
-                        self.log.debug(
-                            f"Step '{step.name}' succeeded, continuing to next step"
-                        )
-                        continue
+                # Figure out which condition we're checking
+                cond = step.on_true
+                exec_status = protos.ExecStatus.EXEC_STATUS_TRUE
+                if wasm_resp.exit_code == WasmExitCode.WASM_EXIT_CODE_FALSE:
+                    cond = step.on_false
+                    exec_status = protos.ExecStatus.EXEC_STATUS_FALSE
+                elif wasm_resp.exit_code == WasmExitCode.WASM_EXIT_CODE_ERROR:
+                    cond = step.on_failure
+                    exec_status = protos.ExecStatus.EXEC_STATUS_ERROR
+                    isr = None  # avoid passing step result on error
 
-                    continue_pipeline, continue_process = self._handle_condition(
-                        step.on_failure, pipeline, step, cmd.audience
+                # Send notification if necessary
+                self._notify_condition(pipeline, step, aud, cond, resp.data)
+
+                # Continue to next step, nothing needed
+                if self.cfg.dry_run:
+                    self.log.debug(
+                        f"Step '{step.name}' succeeded, continuing to next step"
                     )
-                    if not continue_process:
-                        # Exit function early
-                        step_status.abort_status = protos.AbortStatus.ABORT_STATUS_ALL
-                        pipeline_status.step_status.append(step_status)
-                        resp.pipeline_status.append(pipeline_status)
-                        return resp
-                    if not continue_pipeline:
-                        # Continue outer pipeline loop if there are additional pipelines
-                        step_status.abort_status = (
-                            protos.AbortStatus.ABORT_STATUS_CURRENT
+                    continue
+
+                if (
+                    cond is not None
+                    and cond.abort == AbortCondition.ABORT_CONDITION_ABORT_CURRENT
+                ):
+                    # Abort current pipline
+                    step_status.status = AbortCondition.ABORT_CONDITION_ABORT_CURRENT
+                    step_status.status_message = "Step returned: " + wasm_resp.exit_msg
+                    pipeline_status.step_status.append(step_status)
+                    resp.pipeline_status.append(pipeline_status)
+                    # Continue outer pipeline loop if there are additional pipelines
+                    break
+                elif (
+                    cond is not None
+                    and cond.abort == AbortCondition.ABORT_CONDITION_ABORT_ALL
+                ):
+                    # Abort all pipelines
+                    self.metrics.incr(
+                        CounterEntry(
+                            name=errors_counter, value=1.0, labels=labels, aud=aud
                         )
-                        pipeline_status.step_status.append(step_status)
-                        resp.pipeline_status.append(pipeline_status)
-                        break
+                    )
 
-                    continue  # Continue to next step as default
-
-                # Failure conditions
-                self.metrics.incr(
-                    CounterEntry(name=errors_counter, value=1.0, labels=labels, aud=aud)
-                )
-
-                continue_pipeline, continue_process = self._handle_condition(
-                    step.on_failure, pipeline, step, cmd.audience
-                )
-
-                step_status.error = True
-                step_status.error_message = "Step failed: " + wasm_resp.exit_msg
-
-                if not continue_process:
                     # Exit function early
-                    resp.error = True
-                    resp.error_message = step_status.error_message
-                    step_status.abort_status = protos.AbortStatus.ABORT_STATUS_ALL
+                    resp.status = exec_status
+                    resp.status_message = "Step returned: " + wasm_resp.exit_msg
+                    step_status.status_message = "Step returned: " + wasm_resp.exit_msg
+                    step_status.status = AbortCondition.ABORT_CONDITION_ABORT_ALL
                     pipeline_status.step_status.append(step_status)
                     resp.pipeline_status.append(pipeline_status)
                     return resp
-                if not continue_pipeline:
-                    # Continue outer pipeline loop if there are additional pipelines
-                    step_status.abort_status = protos.AbortStatus.ABORT_STATUS_CURRENT
-                    pipeline_status.step_status.append(step_status)
-                    resp.pipeline_status.append(pipeline_status)
-                    break
 
                 pipeline_status.step_status.append(step_status)
 
@@ -463,8 +467,20 @@ class StreamdalClient:
         return resp
 
     def _notify_condition(
-        self, pipeline: protos.Pipeline, step: protos.PipelineStep, aud: protos.Audience
+        self,
+        pipeline: protos.Pipeline,
+        step: protos.PipelineStep,
+        aud: protos.Audience,
+        cond: protos.PipelineStepConditions,
+        payload: bytes,
     ):
+        if cond is None:
+            return
+
+        # TODO: include payload when protos are updated
+        if not cond.notify:
+            return
+
         async def call():
             self.metrics.incr(
                 CounterEntry(
@@ -486,6 +502,7 @@ class StreamdalClient:
                 audience=aud,
                 step_name=step.name,
                 occurred_at_unix_ts_utc=int(datetime.datetime.utcnow().timestamp()),
+                # TODO: include payload
             )
 
             await self.grpc_stub.notify(
@@ -498,40 +515,6 @@ class StreamdalClient:
 
         if not self.cfg.dry_run:
             loop.run_until_complete(call())
-
-    def _handle_condition(
-        self,
-        conditions: [],
-        pipeline: protos.Pipeline,
-        step: protos.PipelineStep,
-        aud: protos.Audience,
-    ) -> (bool, bool):
-        continue_pipeline = True
-        continue_process = True
-
-        for cond in conditions:
-            if cond == protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_NOTIFY:
-                self._notify_condition(pipeline, step, aud)
-                self.log.debug(f"Step '{step.name}' failed, notifying")
-            elif (
-                cond
-                == protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_ABORT_CURRENT
-            ):
-                continue_pipeline = False
-                self.log.debug(
-                    f"Step '{step.name}' failed, aborting further pipeline steps"
-                )
-            elif cond == protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_ABORT_ALL:
-                continue_pipeline = False
-                continue_process = False
-                self.log.debug(
-                    f"Step '{step.name}' failed, aborting further pipelines and steps"
-                )
-            else:
-                # We still need to continue to remaining steps after other conditions have been processed
-                self.log.debug(f"Step '{step.name}' failed, continuing to next step")
-
-        return continue_pipeline, continue_process
 
     def _get_pipelines(self, aud: protos.Audience) -> dict:
         """
@@ -891,7 +874,7 @@ class StreamdalClient:
             resp = protos.WasmResponse()
             resp.output_payload = ""
             resp.exit_msg = "Failed to execute WASM: {}".format(e)
-            resp.exit_code = protos.WasmExitCode.WASM_EXIT_CODE_INTERNAL_ERROR
+            resp.exit_code = protos.WasmExitCode.WASM_EXIT_CODE_ERROR
 
             return resp
 
@@ -1203,7 +1186,7 @@ class StreamdalClient:
             return
 
         # Only successful schema inferences
-        if resp.exit_code != protos.WasmExitCode.WASM_EXIT_CODE_SUCCESS:
+        if resp.exit_code != protos.WasmExitCode.WASM_EXIT_CODE_TRUE:
             return
 
         # If existing schema matches, do nothing

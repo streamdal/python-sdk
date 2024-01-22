@@ -53,8 +53,8 @@ class TestStreamdalWasm:
 
         step = protos.PipelineStep(
             name="detective",
-            on_success=[],
-            on_failure=[],
+            on_true=None,
+            on_error=None,
             wasm_bytes=wasm_bytes,
             wasm_id=uuid.uuid4().__str__(),
             wasm_function="f",
@@ -89,8 +89,8 @@ class TestStreamdalWasm:
 
         step = protos.PipelineStep(
             name="httprequest test",
-            on_success=[],
-            on_failure=[],
+            on_true=None,
+            on_error=None,
             wasm_bytes=wasm_bytes,
             wasm_id=uuid.uuid4().__str__(),
             wasm_function="f",
@@ -116,8 +116,8 @@ class TestStreamdalWasm:
 
         step = protos.PipelineStep(
             name="inferschema test",
-            on_success=[],
-            on_failure=[],
+            on_true=None,
+            on_error=None,
             wasm_bytes=wasm_bytes,
             wasm_id=uuid.uuid4().__str__(),
             wasm_function="f",
@@ -147,8 +147,8 @@ class TestStreamdalWasm:
 
         step = protos.PipelineStep(
             name="transform test - replace",
-            on_success=[],
-            on_failure=[],
+            on_true=None,
+            on_error=None,
             wasm_bytes=wasm_bytes,
             wasm_id=uuid.uuid4().__str__(),
             wasm_function="f",
@@ -180,8 +180,8 @@ class TestStreamdalWasm:
 
         step = protos.PipelineStep(
             name="transform test - truncate",
-            on_success=[],
-            on_failure=[],
+            on_true=None,
+            on_error=None,
             wasm_bytes=wasm_bytes,
             wasm_id=uuid.uuid4().__str__(),
             wasm_function="f",
@@ -209,8 +209,8 @@ class TestStreamdalWasm:
 
         step = protos.PipelineStep(
             name="valid json test",
-            on_success=[],
-            on_failure=[],
+            on_true=None,
+            on_error=None,
             wasm_bytes=wasm_bytes,
             wasm_id=uuid.uuid4().__str__(),
             wasm_function="f",
@@ -245,8 +245,8 @@ class TestStreamdalWasm:
 
         step = protos.PipelineStep(
             name="KV exists test",
-            on_success=[],
-            on_failure=[],
+            on_true=None,
+            on_error=None,
             wasm_bytes=wasm_bytes,
             wasm_id=uuid.uuid4().__str__(),
             wasm_function="f",
@@ -285,8 +285,8 @@ class TestStreamdalWasm:
                     steps=[
                         protos.PipelineStep(
                             name="detective",
-                            on_success=[],
-                            on_failure=[],
+                            on_true=None,
+                            on_error=None,
                             wasm_bytes=detective_wasm_bytes,
                             wasm_id=uuid.uuid4().__str__(),
                             wasm_function="f",
@@ -300,8 +300,8 @@ class TestStreamdalWasm:
                         protos.PipelineStep(
                             dynamic=True,
                             name="transform",
-                            on_success=[],
-                            on_failure=[],
+                            on_true=None,
+                            on_error=None,
                             wasm_bytes=transform_wasm_bytes,
                             wasm_id=uuid.uuid4().__str__(),
                             wasm_function="f",
@@ -331,5 +331,5 @@ class TestStreamdalWasm:
         )
 
         assert res is not None
-        assert res.error is False
+        assert res.status == protos.ExecStatus.EXEC_STATUS_TRUE
         assert res.data == b'{"users":[{"name": "Bob","email": "REDACTED"}]}'

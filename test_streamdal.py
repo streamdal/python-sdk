@@ -70,9 +70,12 @@ class TestStreamdalClient:
 
         pipeline = protos.Pipeline(id=uuid.uuid4().__str__())
         step = protos.PipelineStep(name="test")
+        step.on_true = protos.PipelineStepConditions(
+            notify=True,
+        )
         aud = protos.Audience()
 
-        self.client._notify_condition(pipeline, step, aud)
+        self.client._notify_condition(pipeline, step, aud, step.on_true, b"")
         fake_stub.notify.assert_called_once()
         fake_metrics.incr.assert_called_once()
 
@@ -90,7 +93,7 @@ class TestStreamdalClient:
     def test_process_success(self):
         wasm_resp = protos.WasmResponse(
             output_payload=b'{"object": {"type": "streamdal"}}',
-            exit_code=protos.WasmExitCode.WASM_EXIT_CODE_SUCCESS,
+            exit_code=protos.WasmExitCode.WASM_EXIT_CODE_TRUE,
             exit_msg="",
         )
         self.client._call_wasm = mock.MagicMock()
@@ -108,12 +111,10 @@ class TestStreamdalClient:
                     steps=[
                         protos.PipelineStep(
                             name="test",
-                            on_success=[
-                                protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_UNSET
-                            ],
-                            on_failure=[
-                                protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_ABORT_CURRENT
-                            ],
+                            on_true=None,
+                            on_false=protos.PipelineStepConditions(
+                                abort=protos.AbortCondition.ABORT_CONDITION_ABORT_CURRENT,
+                            ),
                             detective=protos.steps.DetectiveStep(
                                 path="object.type",
                                 args=["streamdal"],
@@ -137,8 +138,8 @@ class TestStreamdalClient:
         )
 
         assert resp is not None
-        assert resp.error is False
-        assert resp.error_message == ""
+        assert resp.status == protos.ExecStatus.EXEC_STATUS_TRUE
+        assert resp.status_message == ""
         assert resp.data == b'{"object": {"type": "streamdal"}}'
 
     def test_process_failure_and_abort(self):
@@ -149,7 +150,7 @@ class TestStreamdalClient:
 
         wasm_resp = protos.WasmResponse(
             output_payload=b"{}",
-            exit_code=protos.WasmExitCode.WASM_EXIT_CODE_FAILURE,
+            exit_code=protos.WasmExitCode.WASM_EXIT_CODE_FALSE,
             exit_msg="field not found",
         )
         client._call_wasm = mock.MagicMock()
@@ -168,11 +169,12 @@ class TestStreamdalClient:
                     steps=[
                         protos.PipelineStep(
                             name="test",
-                            on_success=[],
-                            on_failure=[
-                                protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_ABORT_ALL,
-                                protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_NOTIFY,
-                            ],
+                            on_true=None,
+                            on_error=None,
+                            on_false=protos.PipelineStepConditions(
+                                abort=protos.AbortCondition.ABORT_CONDITION_ABORT_ALL,
+                                notify=True,
+                            ),
                             detective=protos.steps.DetectiveStep(
                                 path="object.type",
                                 args=["batch"],
@@ -181,11 +183,12 @@ class TestStreamdalClient:
                         ),
                         protos.PipelineStep(
                             name="test",
-                            on_success=[],
-                            on_failure=[
-                                protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_ABORT_CURRENT,
-                                protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_NOTIFY,
-                            ],
+                            on_true=None,
+                            on_error=None,
+                            on_false=protos.PipelineStepConditions(
+                                abort=protos.AbortCondition.ABORT_CONDITION_ABORT_CURRENT,
+                                notify=True,
+                            ),
                             detective=protos.steps.DetectiveStep(
                                 path="object.type",
                                 args=["should not execute"],
@@ -210,19 +213,22 @@ class TestStreamdalClient:
 
         assert resp is not None
         fake_stub.notify.assert_called_once()
-        assert resp.error is True
-        assert resp.error_message == "Step failed: field not found"
+        assert resp.status == protos.ExecStatus.EXEC_STATUS_FALSE
+        assert resp.status_message == "Step returned: field not found"
         assert resp.data == b"{}"
         assert len(resp.pipeline_status) == 1
         assert len(resp.pipeline_status[0].step_status) == 1
         assert (
-            resp.pipeline_status[0].step_status[0].abort_status
-            == protos.AbortStatus.ABORT_STATUS_ALL
+            resp.pipeline_status[0].step_status[0].status
+            == protos.AbortCondition.ABORT_CONDITION_ABORT_ALL
         )
-        assert resp.pipeline_status[0].step_status[0].error is True
         assert (
-            resp.pipeline_status[0].step_status[0].error_message
-            == "Step failed: field not found"
+            resp.pipeline_status[0].step_status[0].status
+            == protos.ExecStatus.EXEC_STATUS_FALSE
+        )
+        assert (
+            resp.pipeline_status[0].step_status[0].status_message
+            == "Step returned: field not found"
         )
 
     def test_process_failure_dry_run(self):
@@ -231,7 +237,7 @@ class TestStreamdalClient:
 
         wasm_resp = protos.WasmResponse(
             output_payload=b'{"object": {"type": "should be replaced by original data on dry run"}}',
-            exit_code=protos.WasmExitCode.WASM_EXIT_CODE_FAILURE,
+            exit_code=protos.WasmExitCode.WASM_EXIT_CODE_FALSE,
             exit_msg="field not found",
         )
         client._call_wasm = mock.MagicMock()
@@ -249,10 +255,10 @@ class TestStreamdalClient:
                     steps=[
                         protos.PipelineStep(
                             name="test",
-                            on_success=[],
-                            on_failure=[
-                                protos.PipelineStepCondition.PIPELINE_STEP_CONDITION_ABORT_CURRENT
-                            ],
+                            on_true=None,
+                            on_false=protos.PipelineStepConditions(
+                                abort=protos.AbortCondition.ABORT_CONDITION_ABORT_CURRENT,
+                            ),
                             detective=protos.steps.DetectiveStep(
                                 path="object.type",
                                 args=["batch"],
@@ -276,8 +282,8 @@ class TestStreamdalClient:
         )
 
         assert resp is not None
-        assert resp.error is False
-        assert resp.error_message == ""
+        assert resp.status == protos.ExecStatus.EXEC_STATUS_TRUE
+        assert resp.status_message == ""
         assert resp.data == b'{"object": {"type": "streamdal"}}'
 
     def test_tail_request_start(self, mocker):
