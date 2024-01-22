@@ -487,6 +487,11 @@ class StreamdalClient:
         if not cond.notify:
             return
 
+        self.log.debug("Notifying")
+
+        if self.cfg.dry_run:
+            return
+
         async def call():
             self.metrics.incr(
                 CounterEntry(
@@ -515,12 +520,9 @@ class StreamdalClient:
                 req, timeout=self.grpc_timeout, metadata=self._get_metadata()
             )
 
-        self.log.debug("Notifying")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-
-        if not self.cfg.dry_run:
-            loop.run_until_complete(call())
+        loop.run_until_complete(call())
 
     def _get_pipelines(self, aud: protos.Audience) -> dict:
         """
