@@ -339,6 +339,7 @@ class StreamdalClient:
                 req.data,
                 req.data,
             )
+            resp.status_message = "No pipelines found for audience, doing nothing"
             return resp
 
         self.metrics.incr(CounterEntry(name=rate_bytes, value=1.0, labels={}, aud=aud))
