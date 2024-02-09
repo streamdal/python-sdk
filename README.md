@@ -1,4 +1,6 @@
-# Streamdal Python SDK
+# MOVED TO [github.com/streamdal/streamdal/sdks/python](https://github.com/streamdal/streamdal/tree/main/sdks/python)
+
+## Streamdal Python SDK
 
 
 [![Master build status](https://github.com/streamdal/python-sdk/actions/workflows/main.yml/badge.svg)](https://github.com/streamdal/python-sdk/actions/workflows/main.yml)
